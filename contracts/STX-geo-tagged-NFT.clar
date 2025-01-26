@@ -171,3 +171,63 @@
         (nft-mint? geotagged-nft token-id tx-sender)
     )
 )
+
+
+;; Points Transfer Function
+(define-public (transfer-points (recipient principal) (amount uint))
+    (let (
+        (sender-balance (get-user-points tx-sender))
+        (recipient-balance (get-user-points recipient))
+    )
+        (asserts! (validate-amount amount) err-zero-amount)
+        (asserts! (validate-user recipient) err-invalid-user)
+        (asserts! (>= sender-balance amount) err-insufficient-points)
+
+        ;; Update sender balance
+        (map-set user-points 
+            tx-sender 
+            (- sender-balance amount))
+
+        ;; Update recipient balance
+        (map-set user-points 
+            recipient 
+            (+ recipient-balance amount))
+
+        (ok true)
+    )
+)
+
+;; Read-only Functions
+(define-read-only (get-location (id uint))
+    (map-get? locations id)
+)
+
+(define-read-only (get-user-points (user principal))
+    (default-to u0 (map-get? user-points user))
+)
+
+(define-read-only (get-completion-status (user principal) (location-id uint))
+    (get completed (default-to 
+        { completed: false, timestamp: u0 }
+        (map-get? user-completions { user: user, location-id: location-id })))
+)
+
+(define-read-only (is-nft-minted (token-id uint))
+    (default-to false (map-get? minted-nfts token-id))
+)
+
+(define-read-only (get-location-status (location-id uint))
+    (default-to false (map-get? location-status location-id))
+)
+
+;; Get simplified user stats
+(define-read-only (get-user-stats (user principal))
+    (let (
+        (total-points (get-user-points user))
+    )
+        (ok {
+            points-balance: total-points,
+            can-mint-nft: (>= total-points points-threshold)
+        })
+    )
+)
