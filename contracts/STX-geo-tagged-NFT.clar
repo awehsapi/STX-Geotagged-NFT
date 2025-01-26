@@ -75,3 +75,99 @@
         (+ (* lat-diff lat-diff) (* long-diff long-diff))
     )
 )
+
+
+(define-private (validate-token-id (token-id uint))
+    (and (> token-id u0)
+         (<= token-id u1000))  ;; Assuming max NFT ID is 1000
+)
+
+(define-private (validate-amount (amount uint))
+    (> amount u0)
+)
+
+(define-private (validate-user (user principal))
+    (and 
+        (not (is-eq user tx-sender))
+        (not (is-eq user contract-owner))
+    )
+)
+
+(define-private (validate-location-active (location-id uint))
+    (default-to true (map-get? location-status location-id))
+)
+
+;; Admin Functions
+(define-public (add-location (id uint) (name (string-ascii 50)) (lat uint) (long uint) (activity (string-ascii 100)) (points uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (asserts! (< (default-to u0 (map-get? location-count u0)) max-locations) err-location-limit-exceeded)
+        (asserts! (validate-coordinates lat long) err-invalid-coordinates)
+        (asserts! (validate-location-data name activity points) err-invalid-points)
+        (asserts! (not (is-some (map-get? locations id))) err-location-not-found)
+
+        (map-set location-status id true)
+        (map-set location-count u0 (+ u1 (default-to u0 (map-get? location-count u0))))
+        (ok (map-set locations id { 
+            name: name,
+            lat: lat, 
+            long: long,
+            activity: activity,
+            reward-points: points
+        }))
+    )
+)
+
+(define-public (set-location-status (location-id uint) (active bool))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (asserts! (is-some (map-get? locations location-id)) err-location-not-found)
+        (ok (map-set location-status location-id active))
+    )
+)
+
+;; Core Functions
+(define-public (complete-activity (location-id uint) (user-lat uint) (user-long uint))
+    (let ((location (unwrap! (map-get? locations location-id) err-invalid-location))
+          (completion-key { user: tx-sender, location-id: location-id }))
+
+        (asserts! (validate-coordinates user-lat user-long) err-invalid-coordinates)
+        (asserts! (not (default-to false (get completed (map-get? user-completions completion-key)))) 
+                 err-already-completed)
+        (asserts! (validate-location-active location-id) err-location-disabled)
+        (asserts! (<= (calculate-distance user-lat user-long 
+                                        (get lat location) 
+                                        (get long location)) 
+                     min-distance)
+                 err-invalid-location)
+
+        (map-set user-completions 
+            completion-key 
+            { completed: true,
+              timestamp: stacks-block-height }
+        )
+
+        (map-set user-points 
+            tx-sender 
+            (+ (default-to u0 (map-get? user-points tx-sender))
+               (get reward-points location))
+        )
+
+        (ok true)
+    )
+)
+
+(define-public (mint-nft (token-id uint))
+    (let ((user-point-balance (default-to u0 (map-get? user-points tx-sender))))
+        (asserts! (validate-token-id token-id) err-invalid-token-id)
+        (asserts! (>= user-point-balance points-threshold) err-insufficient-points)
+        (asserts! (not (default-to false (map-get? minted-nfts token-id))) err-nft-already-minted)
+
+        (map-set user-points 
+            tx-sender 
+            (- user-point-balance points-threshold))
+
+        (map-set minted-nfts token-id true)    
+        (nft-mint? geotagged-nft token-id tx-sender)
+    )
+)
